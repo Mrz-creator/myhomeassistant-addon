@@ -1,42 +1,21 @@
-From a6c952a9c31a535d7eae22e1803ad2f2ab7de915 Mon Sep 17 00:00:00 2001
-Message-Id: <a6c952a9c31a535d7eae22e1803ad2f2ab7de915.1671118726.git.stefan@agner.ch>
-From: Stefan Agner <stefan@agner.ch>
-Date: Thu, 15 Dec 2022 16:38:34 +0100
-Subject: [PATCH] Use TCP socket instead of serial port (SDK)
-
-Instead of opening a serial port, open a TCP socket on port 9999. Pass
-the listening socket to the new instance in case a controller reset is
-being requested. This makes sure the TCP connection stays up even when
-zigbeed restarts.
----
- protocol/zigbee/app/zigbeed/serial_adapter.c | 169 +++++++++++--------
- 1 file changed, 99 insertions(+), 70 deletions(-)
-
-diff --git a/protocol/zigbee/app/zigbeed/serial_adapter.c b/protocol/zigbee/app/zigbeed/serial_adapter.c
-index f48630509..2807ab91c 100644
---- a/protocol/zigbee/app/zigbeed/serial_adapter.c
-+++ b/protocol/zigbee/app/zigbeed/serial_adapter.c
-@@ -17,13 +17,16 @@
-  *
-  ******************************************************************************/
- 
--#include <stdint.h>
--#include <stdbool.h>
- #include <errno.h>
+diff --git a/protocol/zigbee/app/projects/zigbeed/serial_adapter.c b/protocol/zigbee/app/projects/zigbeed/serial_adapter.c
+index 184004620..77c70ff03 100644
+--- a/protocol/zigbee/app/projects/zigbeed/serial_adapter.c
++++ b/protocol/zigbee/app/projects/zigbeed/serial_adapter.c
+@@ -23,8 +23,11 @@
  #include <fcntl.h>
-+#include <netinet/in.h>
-+#include <stdint.h>
-+#include <stdbool.h>
  #include <stdio.h>
-+#include <stdlib.h>
  #include <string.h>
 -#include <termios.h>
-+#include <sys/socket.h>
-+#include <netinet/tcp.h>
  #include <unistd.h>
++#include <stdlib.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
  
- #include "ember-types.h"
-@@ -37,19 +40,17 @@
+ #include "sl_zigbee_types.h"
+ #include "serial_adapter.h"
+@@ -37,19 +40,16 @@
  #define MAX_OUT_BLOCK_LEN     512   // maximum bytes to output at one time
  #define MAX_IN_BLOCK_LEN      512   // maximum bytes to input at one time
  
@@ -45,15 +24,14 @@ index f48630509..2807ab91c 100644
  #define DEFAULT_IN_BLOCK_LEN 256
  
 -char serialPort[SERIAL_PORT_NAME_MAX_LEN] = DEFAULT_SERIAL_PORT;
++struct in6_addr ezspListenAddress = IN6ADDR_ANY_INIT;
++uint16_t ezspPort = 9999;
  
 -#ifdef ZIGBEE_PRO_COMPLIANCE_ON_HOST
 -#include "sl_cli_threaded_host.h"
 -extern bool sli_cli_is_input_handled(void);
 -extern int sli_cli_get_pipe_read_fd(void);
 -#endif // ZIGBEE_PRO_COMPLIANCE_ON_HOST
-+struct in6_addr ezspListenAddress = IN6ADDR_ANY_INIT;
-+uint16_t ezspPort = 9999;
-+
 +extern jmp_buf gResetJump;
 +
 +static int socketFd = NULL_FILE_DESCRIPTOR;
@@ -62,12 +40,12 @@ index f48630509..2807ab91c 100644
  static uint8_t outBuffer[MAX_OUT_BLOCK_LEN];  // array to buffer output
  static uint8_t *outBufRd;                     // outBuffer read pointer
  static uint8_t *outBufWr;                     // outBuffer write pointer
-@@ -59,13 +60,59 @@ static uint8_t *inBufRd;                      // inBuffer read pointer
+@@ -59,13 +59,59 @@ static uint8_t *inBufRd;                      // inBuffer read pointer
  static uint8_t *inBufWr;                      // inBuffer write pointer
  static uint16_t inBlockLen;                   // bytes to read ahead
  
 -static void serialClose(void)
-+static EmberStatus initSocket(void)
++static sl_status_t initSocket(void)
  {
 -  if (serialFd != NULL_FILE_DESCRIPTOR) {
 -    tcflush(serialFd, TCIOFLUSH);
@@ -80,7 +58,7 @@ index f48630509..2807ab91c 100644
 +
 +  if ((serverFd = socket(AF_INET6, SOCK_STREAM, 0)) < 0) {
 +    fprintf(stderr, "Failed to create server socket: %s\r\n", strerror(errno));
-+    return EMBER_ERR_FATAL;
++    return SL_STATUS_FAIL;
 +  }
 +
 +  // Forcefully attaching socket to the port 8080
@@ -88,8 +66,8 @@ index f48630509..2807ab91c 100644
 +                 SO_REUSEADDR, &opt,
 +                 sizeof(opt))) {
 +    fprintf(stderr, "Failed to set server socket options: %s\r\n", strerror(errno));
-+    return EMBER_ERR_FATAL;
-   }
++    return SL_STATUS_FAIL;
++  }
 +
 +  address.sin6_family = AF_INET6;
 +  address.sin6_addr = ezspListenAddress;
@@ -97,19 +75,19 @@ index f48630509..2807ab91c 100644
 +
 +  if (bind(serverFd, (struct sockaddr*)&address, sizeof(address)) < 0) {
 +    fprintf(stderr, "Failed to bind server socket to port %d: %s\r\n", ezspPort, strerror(errno));
-+    return EMBER_ERR_FATAL;
-+  }
++    return SL_STATUS_FAIL;
+   }
 +
 +  fprintf(stderr, "Listening on port %d for connection...\r\n", ezspPort);
 +  if (listen(serverFd, 3) < 0) {
 +    fprintf(stderr, "Failed to listen on server socket: %s\r\n", strerror(errno));
-+    return EMBER_ERR_FATAL;
++    return SL_STATUS_FAIL;
 +  }
 +
 +  fprintf(stderr, "Accepting connection.\r\n");
 +  if ((socketFd = accept(serverFd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) < 0) {
 +    fprintf(stderr, "Failed to accept on server socket: %s\r\n", strerror(errno));
-+    return EMBER_SERIAL_RX_EMPTY;
++    return SL_STATUS_EMPTY;
 +  }
 +  fprintf(stderr, "Accepted connection %d.\r\n", socketFd);
 +
@@ -123,11 +101,11 @@ index f48630509..2807ab91c 100644
 +    fprintf(stderr, "Failed to set server socket options: %s\r\n", strerror(errno));
 +  }
 +
-+  return EMBER_SUCCESS;
++  return SL_STATUS_OK;
  }
  
  static void writeFlush(void)
-@@ -73,11 +120,10 @@ static void writeFlush(void)
+@@ -73,11 +119,10 @@ static void writeFlush(void)
    int16_t count;
  
    if (outBufWr - outBufRd) {
@@ -140,13 +118,12 @@ index f48630509..2807ab91c 100644
      if (outBufRd == outBufWr) {
        outBufRd = outBufWr = outBuffer;
      }
-@@ -86,13 +132,23 @@ static void writeFlush(void)
+@@ -86,13 +131,22 @@ static void writeFlush(void)
  
- static EmberStatus readAvailable(uint16_t *count)
+ static sl_status_t readAvailable(uint16_t *count)
  {
 -  int16_t bytesRead;
 +  int bytesRead;
-+
    if (inBufRd == inBufWr) {
      inBufRd = inBufWr = inBuffer;
 -    bytesRead = read(serialFd, inBuffer, inBlockLen);
@@ -166,17 +143,16 @@ index f48630509..2807ab91c 100644
    }
    *count = inBufWr - inBufRd;
    if (inBufRd == inBufWr) {
-@@ -113,7 +169,8 @@ EmberStatus emberSerialInit(uint8_t port,
+@@ -113,7 +167,7 @@ sl_status_t sli_legacy_serial_init(uint8_t port,
  #ifdef IO_LOG
    logFile = fopen(IO_LOG, "w");
  #endif
 -  struct termios tios;
 +  const char *env;
-+
    outBufRd = outBuffer;
    outBufWr = outBuffer;
    outBlockLen = DEFAULT_OUT_BLOCK_LEN;
-@@ -127,38 +184,28 @@ EmberStatus emberSerialInit(uint8_t port,
+@@ -127,38 +181,28 @@ sl_status_t sli_legacy_serial_init(uint8_t port,
      inBlockLen = MAX_IN_BLOCK_LEN;
    }
  
@@ -193,12 +169,12 @@ index f48630509..2807ab91c 100644
 -    fprintf(stderr, "Use socat to create PTYs for zigbeed and the host app. Eg:\r\n");
 -    fprintf(stderr, "socat -x -v pty,link=/dev/ttyZigbeeNCP pty,link=/tmp/ttyZigbeeNCP\r\n");
 -    serialClose();
--    return EMBER_ERR_FATAL;
+-    return SL_STATUS_FAIL;
 +  // Get file descriptor from previous instance, if valid.
 +  env = getenv("ZIGBEED_SOCKET_FD");
 +  if (env && (socketFd = strtol(env, NULL, 10)) > 0) {
 +    fprintf(stderr, "Reusing socket from previous instance.\r\n");
-+    return EMBER_SUCCESS;
++    return SL_STATUS_OK;
    }
  
 -  tcflush(serialFd, TCIOFLUSH);       // flush all input and output data
@@ -221,7 +197,7 @@ index f48630509..2807ab91c 100644
 +{
 +  char buf[16];
  
--  return EMBER_SUCCESS;
+-  return SL_STATUS_OK;
 +  // If we aave a valid socket, leave it open and pass fd number to
 +  // the new instance.
 +  if (socketFd > 0) {
@@ -232,8 +208,8 @@ index f48630509..2807ab91c 100644
 +  }
  }
  
- EmberStatus emberSerialWriteByte(uint8_t port, uint8_t dataByte)
-@@ -211,36 +258,18 @@ void sli_serial_adapter_tick_callback(void)
+ sl_status_t sli_legacy_serial_write_byte(uint8_t port, uint8_t dataByte)
+@@ -211,36 +255,19 @@ void sli_serial_adapter_tick_callback(void)
    FD_ZERO(&mainloop.mWriteFdSet);
    FD_ZERO(&mainloop.mErrorFdSet);
  
@@ -245,7 +221,7 @@ index f48630509..2807ab91c 100644
 -  FD_SET(pipeReadFd, &mainloop.mErrorFdSet);
 -  serialFd = (serialFd > pipeReadFd ? serialFd : pipeReadFd);
 -#endif // ZIGBEE_PRO_COMPLIANCE_ON_HOST
--
+ 
    // Update mainloop initial FD and its timeout value
 -  mainloop.mMaxFd           = serialFd;
 +  mainloop.mMaxFd           = socketFd;
@@ -273,6 +249,3 @@ index f48630509..2807ab91c 100644
    } else if (errno != EINTR) {
      //printf("%d\n", errno);
      assert(false);
--- 
-2.39.0
-

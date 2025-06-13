@@ -1,20 +1,5 @@
-From 2a6cc51eb53fcc7d3b6525cb8190d212c430263f Mon Sep 17 00:00:00 2001
-Message-ID: <2a6cc51eb53fcc7d3b6525cb8190d212c430263f.1686315449.git.stefan@agner.ch>
-From: Stefan Agner <stefan@agner.ch>
-Date: Thu, 15 Dec 2022 16:37:02 +0100
-Subject: [PATCH] Use TCP socket instead of serial port (main/app)
-
-Instead of opening a serial port, open a TCP socket on port 9999. Pass
-the listening socket to the new instance in case a controller reset is
-being requested. This makes sure the TCP connection stays up even when
-zigbeed restarts.
----
- app.c  | 62 +++++++++++++++++++++++++++++++++++++++++++++++++---------
- main.c |  3 +++
- 2 files changed, 56 insertions(+), 9 deletions(-)
-
 diff --git a/app.c b/app.c
-index 2b74eab..e7286dd 100644
+index 572d95e..64fd7cc 100644
 --- a/app.c
 +++ b/app.c
 @@ -27,6 +27,7 @@
@@ -46,8 +31,8 @@ index 2b74eab..e7286dd 100644
    OT_POSIX_OPT_VERBOSE        = 'v',
  };
  
--#define GETOPT_OPTION_STRING "r:d:p:hv"
-+#define GETOPT_OPTION_STRING "r:d:l:p:hv"
+-#define GETOPT_OPTION_STRING "r:d:p:hv:"
++#define GETOPT_OPTION_STRING "r:d:l:p:hv:"
  static const struct option kOptions[] = {
    { "radio-url", required_argument, NULL, OT_POSIX_OPT_RADIO_URL },
    { "debug-level", required_argument, NULL, OT_POSIX_OPT_DEBUG_LEVEL },
@@ -55,7 +40,7 @@ index 2b74eab..e7286dd 100644
 +  { "ezsp-listen", required_argument, NULL, OT_POSIX_OPT_EZSP_LISTEN },
 +  { "ezsp-listen-port", required_argument, NULL, OT_POSIX_OPT_EZSP_LISTEN_PORT },
    { "help", no_argument, NULL, OT_POSIX_OPT_HELP },
-   { "verbose", no_argument, NULL, OT_POSIX_OPT_VERBOSE },
+   { "verbose", required_argument, NULL, OT_POSIX_OPT_VERBOSE },
    { 0, 0, 0, 0 }
 @@ -113,7 +119,8 @@ static void PrintUsage(const char *aProgramName, FILE *aStream, int aExitCode)
            "Options:\n"
@@ -65,9 +50,9 @@ index 2b74eab..e7286dd 100644
 +          "    -l  --ezsp-listen <address>   Address to listen on (EZSP protocol).\n"
 +          "    -p  --ezsp-listen-port <port> Port to listen on (EZSP protocol).\n"
            "    -h  --help                    Display this usage information.\n"
-           "    -v  --verbose                 Also log Spinel to stderr.\n",
+           "    -v  --verbose <value>         Also log Spinel to stderr, value: 1=enable; 0=disable.\n",
            aProgramName);
-@@ -126,7 +133,6 @@ static ssize_t ParseEtcConf(char *confFilePath, int aArgVectorSize, char *aArgVe
+@@ -165,7 +172,6 @@ static ssize_t ParseEtcConf(char *confFilePath, int aArgVectorSize, char *aArgVe
    ssize_t argCount = 0;
    FILE *fp = fopen(confFilePath, "r");
    if (fp == NULL) {
@@ -75,7 +60,7 @@ index 2b74eab..e7286dd 100644
      return 0; // no config file
    }
  
-@@ -203,6 +209,39 @@ static ssize_t ParseEtcConf(char *confFilePath, int aArgVectorSize, char *aArgVe
+@@ -211,6 +217,39 @@ static ssize_t ParseEtcConf(char *confFilePath, int aArgVectorSize, char *aArgVe
    return argCount;
  }
  
@@ -115,7 +100,7 @@ index 2b74eab..e7286dd 100644
  static void ParseArg(int aArgCount, char *aArgVector[], PosixConfig *aConfig)
  {
    optind = 1;
-@@ -224,13 +263,18 @@ static void ParseArg(int aArgCount, char *aArgVector[], PosixConfig *aConfig)
+@@ -232,13 +271,18 @@ static void ParseArg(int aArgCount, char *aArgVector[], PosixConfig *aConfig)
        case OT_POSIX_OPT_HELP:
          PrintUsage(aArgVector[0], stdout, OT_EXIT_SUCCESS);
          break;
@@ -123,7 +108,7 @@ index 2b74eab..e7286dd 100644
 -        if (strlen(optarg) > SERIAL_PORT_NAME_MAX_LEN) {
 -          fprintf(stderr, "Error: ezsp-interface name too long\n");
 +      case OT_POSIX_OPT_EZSP_LISTEN:
-+	if (!parseListenAddress(optarg)) {
++        if (!parseListenAddress(optarg)) {
 +          fprintf(stderr, "Error: could not parse ezsp-listen address\n");
            exit(OT_EXIT_INVALID_ARGUMENTS);
          }
@@ -133,16 +118,16 @@ index 2b74eab..e7286dd 100644
 +        if (!parseListenPort(optarg)) {
 +          fprintf(stderr, "Error: could not parse ezsp-listen port\n");
 +          exit(OT_EXIT_INVALID_ARGUMENTS);
-+	}
-+	break;
++	      }
++	      break;
        case OT_POSIX_OPT_RADIO_URL:
          if (strlen(optarg) > RADIO_URL_MAX_LEN) {
            fprintf(stderr, "Error: Radio URL too long\n");
 diff --git a/main.c b/main.c
-index 0091acf..c26a90d 100644
+index 64e7427..e763cf7 100644
 --- a/main.c
 +++ b/main.c
-@@ -51,6 +51,8 @@ void __gcov_flush();
+@@ -52,6 +52,8 @@ void __gcov_flush();
  // From platform/base/phy/simulation/security.h:
  extern uint8_t simulatorEncryptionType;
  
@@ -150,8 +135,8 @@ index 0091acf..c26a90d 100644
 +
  void app_init(void)
  {
- #if defined(EMBER_TEST)
-@@ -94,6 +96,7 @@ int main(void)
+ #if defined(SL_ZIGBEE_TEST) || defined(ZIGBEE_STACK_ON_HOST)
+@@ -95,6 +97,7 @@ int main(void)
    app_process_args(argc, argv);
  
    if (setjmp(gResetJump)) {
@@ -159,6 +144,3 @@ index 0091acf..c26a90d 100644
      fprintf(stderr, "Restarting\n");
      execvp(argv[0], argv);
    }
--- 
-2.41.0
-
