@@ -1,5 +1,5 @@
 ---
-version: 1.0.2
+version: 1.0.3
 slug: silabs_multiprotocol
 name: Silicon Labs Multiprotocol Cube
 description: Zigbee and OpenThread multiprotocol add-on
@@ -23,25 +23,11 @@ privileged:
   - SYS_RAWIO
   - IPC_LOCK
   - NET_ADMIN
-  - BPF
-  - CHECKPOINT_RESTORE
-  - DAC_READ_SEARCH
-  - IPC_LOCK
-  - NET_ADMIN
-  - NET_RAW
-  - PERFMON
-  - SYS_ADMIN
-  - SYS_MODULE
-  - SYS_NICE
-  - SYS_PTRACE
-  - SYS_RAWIO
-  - SYS_RESOURCE
-  - SYS_TIME
 image: zhozz/{arch}-addon-silabs-multiprotocol-new
 init: false
 options:
   device: null
-  baudrate: "460800"
+  baudrate: "115200"
   flow_control: true
   autoflash_firmware: true
   cpcd_trace: false
