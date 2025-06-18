@@ -10,7 +10,7 @@ arch:
   - aarch64
   - amd64
 homeassistant: 2024.1.0
-gpio: true
+# gpio: true
 hassio_api: true
 discovery:
   - otbr
@@ -18,9 +18,12 @@ discovery:
 host_ipc: false
 host_network: true
 host_uts: true
-privileged:
-  - IPC_LOCK
-  - NET_ADMIN
+full_access: true
+# privileged:
+#   - SYS_ADMIN
+#   - SYS_RAWIO
+#   - IPC_LOCK
+#   - NET_ADMIN
 image: zhozz/{arch}-addon-silabs-multiprotocol-new
 init: false
 options:
