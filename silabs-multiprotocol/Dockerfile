@@ -117,15 +117,15 @@ COPY gecko_sdk /usr/src/gecko_sdk
 
 # zigbeed links against libcpc.so
 COPY --from=cpcd-builder /usr/local/ /usr/${DEBIAN_CROSS_PREFIX}/
-# COPY gecko-sdk-patches/0001-Use-TCP-socket-instead-of-serial-port-SDK.patch /usr/src
-# COPY zigbeed-app-patches/0001-Use-TCP-socket-instead-of-serial-port-main-app.patch /usr/src
+COPY gecko-sdk-patches/0001-Use-TCP-socket-instead-of-serial-port-SDK.patch /usr/src
+COPY zigbeed-app-patches/0001-Use-TCP-socket-instead-of-serial-port-main-app.patch /usr/src
 COPY otbr-patches/0001-Avoid-writing-to-system-console.patch /usr/src
 COPY otbr-patches/0001-rest-support-deleting-the-dataset.patch /usr/src
 
 RUN \
     set -x \
     && cd gecko_sdk \
-    # && patch -p1 < /usr/src/0001-Use-TCP-socket-instead-of-serial-port-SDK.patch \
+    && patch -p1 < /usr/src/0001-Use-TCP-socket-instead-of-serial-port-SDK.patch \
     && patch -p1 < /usr/src/0001-Avoid-writing-to-system-console.patch \
     && patch -p1 < /usr/src/0001-rest-support-deleting-the-dataset.patch \
     && GECKO_SDK=$(pwd) \
@@ -138,7 +138,7 @@ RUN \
        --export-destination=$(pwd)/app/projects/zigbeed/output \
        --copy-proj-sources \
     && cd app/projects/zigbeed/output \
-    # && patch -p1 < /usr/src/0001-Use-TCP-socket-instead-of-serial-port-main-app.patch \
+    && patch -p1 < /usr/src/0001-Use-TCP-socket-instead-of-serial-port-main-app.patch \
     && make -f zigbeed.Makefile \
         AR="${DEBIAN_CROSS_PREFIX}-ar" \
         CC="${DEBIAN_CROSS_PREFIX}-gcc" \
