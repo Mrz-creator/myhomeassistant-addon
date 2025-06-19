@@ -1,5 +1,5 @@
 ---
-version: 1.0.3
+version: 1.0.5
 slug: silabs_multiprotocol
 name: Silicon Labs Multiprotocol Cube
 description: Zigbee and OpenThread multiprotocol add-on
@@ -19,8 +19,6 @@ host_ipc: false
 host_network: true
 host_uts: true
 privileged:
-  - SYS_ADMIN
-  - SYS_RAWIO
   - IPC_LOCK
   - NET_ADMIN
 image: zhozz/{arch}-addon-silabs-multiprotocol-new
